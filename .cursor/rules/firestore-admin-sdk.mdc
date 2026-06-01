@@ -1,0 +1,24 @@
+---
+description: Firestore Admin SDK setup and usage conventions
+alwaysApply: true
+---
+
+# Firestore Admin SDK conventions
+
+## Initialization
+
+- Firestore Admin SDK must be initialized in `src/database/firestoreAdmin.js`.
+- Load config from environment variables; do not hardcode credentials.
+- Expose a `getDb()` function returning a singleton Firestore instance.
+
+## Repositories
+
+- Put persistence functions in `src/database/repos/**`.
+- Repos should export small, focused functions (e.g. `getUserById`, `createUser`).
+- Repos must not contain business logic; only CRUD + query composition.
+
+## Services
+
+- Services call repos and implement business rules (e.g. uniqueness, normalization).
+- Controllers never call repos directly.
+

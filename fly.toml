@@ -1,0 +1,35 @@
+# https://fly.io/docs/reference/configuration/
+#
+# Sized for the smallest Fly Machines preset (shared-cpu-1x / 256MB), which matches
+# Fly's legacy included-allowance shape for full-time VMs. New accounts are usually
+# pay-as-you-go; this still minimizes billable compute. Confirm your org's plan at
+# https://fly.io/docs/about/billing/ — Fly does not guarantee "free" for all orgs.
+
+app = "my-store-be"
+primary_region = "iad"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  # Keep V8 heap below container RAM (256MB) to reduce OOM risk on tiny VMs.
+  NODE_OPTIONS = "--max-old-space-size=200"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -1,0 +1,5 @@
+.env
+firestore-keys.json
+node_modules
+dist
+

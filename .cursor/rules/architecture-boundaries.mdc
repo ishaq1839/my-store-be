@@ -1,0 +1,26 @@
+---
+description: Enforce controller/service/database layering boundaries
+alwaysApply: true
+---
+
+# Backend architecture boundaries
+
+## Layer responsibilities (strict)
+
+- **Routes** (`src/routes/**`): define HTTP paths, middleware, and route-to-controller wiring only.
+- **Controllers** (`src/controllers/**`): handle HTTP concerns only (validate/parse request, call service, map service result/errors to HTTP responses).
+  - Controllers **must not** import Firestore, `firebase-admin`, or database repositories.
+  - Controllers **must not** contain query logic, collection names, or persistence details.
+- **Services** (`src/services/**`): business logic and orchestration only.
+  - Services may call repositories in `src/database/**`.
+  - Services must not depend on Express `req`/`res`.
+- **Database layer** (`src/database/**`): all persistence logic (Firestore client init + repositories).
+  - Only the database layer may import `firebase-admin` / Firestore SDK.
+
+## Import rules (practical)
+
+- `routes` → may import `controllers`
+- `controllers` → may import `services`
+- `services` → may import `database`
+- `database` → must not import `controllers` or `routes`
+

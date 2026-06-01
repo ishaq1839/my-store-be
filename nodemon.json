@@ -1,0 +1,7 @@
+{
+  "watch": ["src"],
+  "ext": "ts",
+  "ignore": ["dist", "node_modules"],
+  "exec": "node -r ts-node/register/transpile-only src/server.ts"
+}
+

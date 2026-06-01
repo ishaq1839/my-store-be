@@ -1,0 +1,31 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "items",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "created_at", "order": "DESCENDING" },
+        { "fieldPath": "uuid", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "batches",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [{ "fieldPath": "created_at", "order": "ASCENDING" }]
+    },
+    {
+      "collectionGroup": "batches",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [{ "fieldPath": "created_at", "order": "DESCENDING" }]
+    },
+    {
+      "collectionGroup": "bills",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "created_at", "order": "DESCENDING" },
+        { "fieldPath": "bill_id", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

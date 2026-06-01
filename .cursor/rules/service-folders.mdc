@@ -1,0 +1,23 @@
+---
+description: Require each service to live in its own folder
+alwaysApply: true
+---
+
+# Service folder conventions
+
+## One service = one folder
+
+- Each domain/service must live under its own folder in `src/services/<service-name>/`.
+- Place only that service’s files in the folder (service entrypoint, validators, helpers, etc.).
+
+## Example
+
+- Authentication: `src/services/authentication/`
+- Catalog: `src/services/catalog/`
+- Orders: `src/services/orders/`
+
+## Routing convention
+
+- Routes should be grouped similarly: `src/routes/authentication.routes.js`, `src/routes/catalog.routes.js`, etc.
+- Controllers may be grouped similarly by file naming (or folders later), but **services must be folders**.
+

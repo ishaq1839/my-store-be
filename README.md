@@ -119,8 +119,4 @@ The container listens on **port 8080** (set in the image via `ENV PORT=8080`).
 - `src/controllers/` — HTTP layer
 - `src/services/` — business logic
 - `src/database/` — Firestore init and repositories
-# store
-# store
-# store
-# store
 # my-store-be
