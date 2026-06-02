@@ -10,9 +10,13 @@ function initAdminApp() {
   if (admin.apps.length) return;
 
   const jsonFromEnv = optionalEnv("FIREBASE_SERVICE_ACCOUNT_JSON");
+  const base64FromEnv = optionalEnv("FIREBASE_SERVICE_ACCOUNT_BASE64");
   const pathFromEnv = optionalEnv("FIREBASE_SERVICE_ACCOUNT_PATH");
 
   let raw = jsonFromEnv;
+  if (!raw && base64FromEnv) {
+    raw = Buffer.from(base64FromEnv, "base64").toString("utf8");
+  }
   if (!raw && pathFromEnv) {
     raw = fs.readFileSync(pathFromEnv, "utf8");
   }
@@ -35,7 +39,7 @@ function initAdminApp() {
     serviceAccount = JSON.parse(raw) as admin.ServiceAccount;
   } catch {
     throw new Error(
-      "Firestore service account must be valid JSON. Set FIREBASE_SERVICE_ACCOUNT_JSON, or set FIREBASE_SERVICE_ACCOUNT_PATH, or provide ./firestore-keys.json."
+      "Firestore service account must be valid JSON. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_BASE64, or set FIREBASE_SERVICE_ACCOUNT_PATH, or provide ./firestore-keys.json."
     );
   }
 
