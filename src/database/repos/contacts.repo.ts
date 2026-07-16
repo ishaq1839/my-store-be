@@ -3,6 +3,7 @@ import { getDb } from "../firestoreAdmin";
 export type ContactRecord = {
   uuid: string;
   owner_uuid: string;
+  store_uuid: string;
   name: string;
   description: string;
   address?: string;
@@ -13,6 +14,7 @@ export type ContactRecord = {
 
 export async function createContact(input: {
   owner_uuid: string;
+  store_uuid: string;
   name: string;
   description: string;
   address?: string;
@@ -25,6 +27,7 @@ export async function createContact(input: {
   const record: ContactRecord = {
     uuid,
     owner_uuid: String(input.owner_uuid),
+    store_uuid: String(input.store_uuid),
     name: String(input.name).trim(),
     description: String(input.description).trim(),
     address: input.address ? String(input.address).trim() : undefined,
@@ -37,14 +40,13 @@ export async function createContact(input: {
   return record;
 }
 
-export async function listContactsByOwner(owner_uuid: string): Promise<ContactRecord[]> {
+export async function listContactsByStore(store_uuid: string): Promise<ContactRecord[]> {
   const db = getDb();
   const snap = await db
     .collection("contacts")
-    .where("owner_uuid", "==", String(owner_uuid))
+    .where("store_uuid", "==", String(store_uuid))
     .orderBy("created_at", "desc")
     .get();
 
   return snap.docs.map((d) => d.data() as ContactRecord);
 }
-

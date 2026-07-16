@@ -2,8 +2,13 @@ import { FieldValue } from "firebase-admin/firestore";
 import { getDb } from "../firestoreAdmin";
 import type { InventoryBatchRecord } from "./inventoryBatches.repo";
 import type { InventoryItemRecord } from "./inventoryItems.repo";
-import { fifoAllocateForBill, mergeBillLines, roundMoney } from "../../services/bills/fifoBillAllocate";
-import { dailySummaryDocId, monthlySummaryDocId, weeklySummaryDocId } from "../../services/bills/summaryDocIds";
+import { fifoAllocateForBill, mergeBillLines, roundMoney, applyUnitDiscountToAllocation, hasAnyUnitDiscount } from "../../services/bills/fifoBillAllocate";
+import {
+  dailySummaryDocId,
+  monthlySummaryDocId,
+  weeklySummaryDocId,
+  yearlySummaryDocId,
+} from "../../services/bills/summaryDocIds";
 
 export type BillLineSnapshot = {
   item_id: string;
@@ -11,6 +16,8 @@ export type BillLineSnapshot = {
   quantity: number;
   retail_subtotal: number;
   display_subtotal: number;
+  /** Present when this line used a per-unit selling price override. */
+  unit_discount?: number;
   fifo_chunks: {
     batch_id: string;
     quantity: number;
@@ -31,6 +38,12 @@ export type BillRecord = {
   display_subtotal_total: number;
   retail_floor_total: number;
   final_total: number;
+  /** True when any line used unit_discount; overall discount_percent was forced to 0. */
+  unit_discount_mode?: boolean;
+  /** Optional customer name captured at checkout. */
+  username?: string;
+  /** Optional customer phone captured at checkout. */
+  phone_number?: string;
 };
 
 function billsCol(store_uuid: string) {
@@ -52,6 +65,16 @@ function itemRef(store_uuid: string, item_id: string) {
 
 function summaryRef(store_uuid: string, docId: string) {
   return getDb().collection("stores").doc(String(store_uuid)).collection("sales_summary").doc(docId);
+}
+
+function itemSummaryRef(store_uuid: string, periodDocId: string, item_id: string) {
+  return getDb()
+    .collection("stores")
+    .doc(String(store_uuid))
+    .collection("item_sales_summary")
+    .doc(periodDocId)
+    .collection("items")
+    .doc(String(item_id));
 }
 
 export async function listBillsInRange(opts: {
@@ -81,6 +104,33 @@ export async function listBillsInRange(opts: {
   return { bills, next_cursor };
 }
 
+/** Fetch all bills in a range (paged) for report flattening. */
+export async function listAllBillsInRange(opts: {
+  store_uuid: string;
+  from_iso: string;
+  to_iso: string;
+  max_bills?: number;
+}): Promise<BillRecord[]> {
+  const max = Math.max(1, Math.min(Number(opts.max_bills) || 2000, 5000));
+  const bills: BillRecord[] = [];
+  let cursor: { created_at: string; bill_id: string } | null = null;
+
+  while (bills.length < max) {
+    const page = await listBillsInRange({
+      store_uuid: opts.store_uuid,
+      from_iso: opts.from_iso,
+      to_iso: opts.to_iso,
+      limit: Math.min(100, max - bills.length),
+      cursor,
+    });
+    bills.push(...page.bills);
+    if (!page.next_cursor || page.bills.length === 0) break;
+    cursor = page.next_cursor;
+  }
+
+  return bills;
+}
+
 export async function getSalesSummaryDoc(
   store_uuid: string,
   doc_id: string
@@ -97,8 +147,10 @@ export async function getSalesSummaryDoc(
 export type FinalizeBillInput = {
   store_uuid: string;
   created_by: string;
-  lines: { item_id: string; quantity: number }[];
+  lines: { item_id: string; quantity: number; unit_discount?: number }[];
   discount_percent: number;
+  username?: string;
+  phone_number?: string;
 };
 
 export type FinalizeBillResult = BillRecord;
@@ -108,14 +160,25 @@ const INSUFFICIENT_STOCK = "INSUFFICIENT_STOCK";
 
 export async function finalizeBillInTransaction(input: FinalizeBillInput): Promise<FinalizeBillResult> {
   const db = getDb();
-  const merged = mergeBillLines(input.lines);
+  let merged;
+  try {
+    merged = mergeBillLines(input.lines);
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string };
+    if (err.code === "UNIT_DISCOUNT_CONFLICT") {
+      throw Object.assign(new Error(err.message || "Conflicting unit_discount"), { code: err.code });
+    }
+    throw e;
+  }
   if (!merged.length) {
     throw Object.assign(new Error("No valid line items"), { code: "EMPTY_LINES" });
   }
 
   const bill_id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
   const created_at = new Date().toISOString();
-  const discount_percent = roundMoney(Number(input.discount_percent));
+  const useLineUnitDiscount = hasAnyUnitDiscount(merged);
+  // If any line has unit_discount, ignore overall bill discount completely.
+  const discount_percent = useLineUnitDiscount ? 0 : roundMoney(Number(input.discount_percent));
 
   return db.runTransaction(async (tx) => {
     const itemSnaps: Map<string, FirebaseFirestore.DocumentSnapshot> = new Map();
@@ -136,6 +199,8 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
     const dailyId = dailySummaryDocId(created_at);
     const weeklyId = weeklySummaryDocId(created_at);
     const monthlyId = monthlySummaryDocId(created_at);
+    const yearlyId = yearlySummaryDocId(created_at);
+    const periodIds = [dailyId, weeklyId, monthlyId, yearlyId];
 
     let retail_floor_total = 0;
     let display_subtotal_total = 0;
@@ -149,10 +214,21 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
     for (const line of merged) {
       const bSnap = batchSnaps.get(line.item_id)!;
       const batches: InventoryBatchRecord[] = bSnap.docs.map((d) => d.data() as InventoryBatchRecord);
-      const alloc = fifoAllocateForBill(batches, line.quantity);
+      let alloc = fifoAllocateForBill(batches, line.quantity);
 
       if (!alloc.ok) {
         throw Object.assign(new Error(`Insufficient stock for item ${line.item_id}`), { code: INSUFFICIENT_STOCK });
+      }
+
+      if (line.unit_discount != null) {
+        try {
+          alloc = applyUnitDiscountToAllocation(alloc, line.quantity, line.unit_discount);
+        } catch (e: unknown) {
+          const err = e as { code?: string; message?: string };
+          throw Object.assign(new Error(err.message || "Invalid unit_discount"), {
+            code: err.code || "INVALID_UNIT_DISCOUNT",
+          });
+        }
       }
 
       retail_floor_total += alloc.retail_subtotal;
@@ -165,6 +241,7 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
         quantity: line.quantity,
         retail_subtotal: roundMoney(alloc.retail_subtotal),
         display_subtotal: roundMoney(alloc.display_subtotal),
+        ...(line.unit_discount != null ? { unit_discount: roundMoney(Number(line.unit_discount)) } : {}),
         fifo_chunks: alloc.chunks.map((c) => ({
           batch_id: c.batch_id,
           quantity: c.quantity,
@@ -236,14 +313,44 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
       display_subtotal_total,
       retail_floor_total,
       final_total,
+      ...(useLineUnitDiscount ? { unit_discount_mode: true } : {}),
+      ...(input.username ? { username: String(input.username).trim() } : {}),
+      ...(input.phone_number ? { phone_number: String(input.phone_number).trim() } : {}),
     };
 
     tx.set(billsCol(input.store_uuid).doc(bill_id), bill);
 
-    const inc = { revenue: FieldValue.increment(final_total), bill_count: FieldValue.increment(1) };
-    tx.set(summaryRef(input.store_uuid, dailyId), inc, { merge: true });
-    tx.set(summaryRef(input.store_uuid, weeklyId), inc, { merge: true });
-    tx.set(summaryRef(input.store_uuid, monthlyId), inc, { merge: true });
+    // Report rollups always use the charged totals after unit_discount overrides
+    // and after overall discount (which is 0 in unit_discount_mode).
+    const profit_after_discount = roundMoney(profit_total * (1 - dp / 100));
+    const bill_quantity_sold = billLines.reduce((sum, line) => sum + line.quantity, 0);
+    const storeInc = {
+      revenue: FieldValue.increment(final_total),
+      bill_count: FieldValue.increment(1),
+      profit_after_discount: FieldValue.increment(profit_after_discount),
+      quantity_sold: FieldValue.increment(bill_quantity_sold),
+    };
+
+    for (const periodDocId of periodIds) {
+      tx.set(summaryRef(input.store_uuid, periodDocId), storeInc, { merge: true });
+    }
+
+    for (const line of billLines) {
+      const item_profit_before = roundMoney(Math.max(0, line.display_subtotal - line.retail_subtotal));
+      const item_profit_after = roundMoney(item_profit_before * (1 - dp / 100));
+      const item_revenue = roundMoney(line.retail_subtotal + item_profit_after);
+      const itemInc = {
+        item_id: line.item_id,
+        item_name: line.item_name,
+        quantity_sold: FieldValue.increment(line.quantity),
+        revenue: FieldValue.increment(item_revenue),
+        profit_after_discount: FieldValue.increment(item_profit_after),
+      };
+
+      for (const periodDocId of periodIds) {
+        tx.set(itemSummaryRef(input.store_uuid, periodDocId, line.item_id), itemInc, { merge: true });
+      }
+    }
 
     return bill;
   });

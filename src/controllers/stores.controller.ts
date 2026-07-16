@@ -7,12 +7,13 @@ export async function createStoreController(req: Request, res: Response, next: N
   try {
     if (!req.user?.uuid) throw new AppError("Unauthorized", { statusCode: 401 });
 
-    const { name, address, description, status, subscription_status } = req.body as {
+    const { name, address, description, status, subscription_status, owner_id } = req.body as {
       name: string;
       address: string;
       description: string;
       status?: "active" | "inactive";
       subscription_status?: "free" | "subscribed";
+      owner_id?: string;
     };
 
     const created = await createStoreService({
@@ -22,6 +23,7 @@ export async function createStoreController(req: Request, res: Response, next: N
       description,
       status,
       subscription_status,
+      owner_id,
     });
 
     return res.status(201).json(created);

@@ -26,6 +26,7 @@ export function buildOpenApiSpec() {
         { name: "Stores" },
         { name: "Stores — Inventory" },
         { name: "Stores — Bills" },
+        { name: "Stores — Reports" },
       ],
       paths: {
         "/health": {
@@ -86,12 +87,26 @@ export function buildOpenApiSpec() {
                             type: "object",
                             properties: {
                               uuid: { type: "string" },
+                              owner_id: { type: "string" },
                               created_at: { type: "string" },
                               updated_at: { type: "string" },
                               name: { type: "string" },
                               description: { type: "string" },
+                              address: { type: "string" },
+                              status: { type: "string" },
+                              subscription_status: { type: "string" },
                             },
-                            required: ["uuid", "created_at", "updated_at", "name", "description"],
+                            required: [
+                              "uuid",
+                              "owner_id",
+                              "created_at",
+                              "updated_at",
+                              "name",
+                              "description",
+                              "address",
+                              "status",
+                              "subscription_status",
+                            ],
                           },
                         },
                       },
@@ -341,10 +356,11 @@ export function buildOpenApiSpec() {
             },
           },
         },
-        "/contacts": {
+        "/stores/{store_uuid}/contacts": {
+          parameters: [{ in: "path", name: "store_uuid", required: true, schema: { type: "string" } }],
           post: {
             tags: ["Contacts"],
-            summary: "Create contact",
+            summary: "Create store contact",
             security: [{ bearerAuth: [] }],
             requestBody: {
               required: true,
@@ -367,16 +383,18 @@ export function buildOpenApiSpec() {
               201: { description: "Contact created" },
               400: { description: "Validation error" },
               401: { description: "Unauthorized" },
+              403: { description: "Forbidden" },
               500: { description: "Internal Server Error" },
             },
           },
           get: {
             tags: ["Contacts"],
-            summary: "List my contacts",
+            summary: "List contacts for a store",
             security: [{ bearerAuth: [] }],
             responses: {
               200: { description: "Contact list" },
               401: { description: "Unauthorized" },
+              403: { description: "Forbidden" },
               500: { description: "Internal Server Error" },
             },
           },
@@ -398,6 +416,10 @@ export function buildOpenApiSpec() {
                       description: { type: "string", example: "Primary store location" },
                       status: { type: "string", enum: ["active", "inactive"], example: "active" },
                       subscription_status: { type: "string", enum: ["free", "subscribed"], example: "free" },
+                      owner_id: {
+                        type: "string",
+                        description: "Admin only. Assign store ownership to this user uuid.",
+                      },
                     },
                     required: ["name", "address", "description"],
                   },
@@ -495,6 +517,110 @@ export function buildOpenApiSpec() {
             },
           },
         },
+        "/stores/{store_uuid}/inventory/items/bulk": {
+          parameters: [{ in: "path", name: "store_uuid", required: true, schema: { type: "string" } }],
+          post: {
+            tags: ["Stores — Inventory"],
+            summary: "Enqueue bulk create inventory items (async CSV/JSON import)",
+            description:
+              "Accepts up to 100 new items and returns immediately with a job_id. Processing continues in the background. Poll GET /items/bulk/{job_id} for progress and per-row results.",
+            security: [{ bearerAuth: [] }],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      items: {
+                        type: "array",
+                        minItems: 1,
+                        maxItems: 100,
+                        items: {
+                          type: "object",
+                          properties: {
+                            type: { type: "string", enum: ["single", "carton"], example: "single" },
+                            name: { type: "string", example: "Coke 500ml" },
+                            description: { type: "string", example: "Soft drink" },
+                            retail_price: { type: "number", example: 100 },
+                            sale_price: { type: "number", nullable: true, example: 150 },
+                            total_items: { type: "integer", example: 24 },
+                          },
+                          required: ["type", "name", "description", "retail_price", "total_items"],
+                        },
+                      },
+                    },
+                    required: ["items"],
+                  },
+                },
+              },
+            },
+            responses: {
+              202: {
+                description: "Job accepted; processing continues asynchronously",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        job_id: { type: "string" },
+                        status: { type: "string", example: "queued" },
+                        total: { type: "integer", example: 10 },
+                      },
+                    },
+                  },
+                },
+              },
+              400: { description: "Validation error (e.g. empty items or >100 rows)" },
+              401: { description: "Unauthorized" },
+              403: { description: "Not store owner" },
+              404: { description: "Store not found" },
+            },
+          },
+        },
+        "/stores/{store_uuid}/inventory/items/bulk/{job_id}": {
+          parameters: [
+            { in: "path", name: "store_uuid", required: true, schema: { type: "string" } },
+            { in: "path", name: "job_id", required: true, schema: { type: "string" } },
+          ],
+          get: {
+            tags: ["Stores — Inventory"],
+            summary: "Get bulk import job status",
+            description: "Poll until status is completed or failed. Includes per-row results when available.",
+            security: [{ bearerAuth: [] }],
+            responses: {
+              200: {
+                description: "Job status",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        job_id: { type: "string" },
+                        status: {
+                          type: "string",
+                          enum: ["queued", "processing", "completed", "failed"],
+                        },
+                        total: { type: "integer" },
+                        processed: { type: "integer" },
+                        created: { type: "integer" },
+                        failed: { type: "integer" },
+                        results: { type: "array", items: { type: "object" } },
+                        error: { type: "string", nullable: true },
+                        created_at: { type: "string" },
+                        started_at: { type: "string", nullable: true },
+                        completed_at: { type: "string", nullable: true },
+                      },
+                    },
+                  },
+                },
+              },
+              401: { description: "Unauthorized" },
+              403: { description: "Not store owner" },
+              404: { description: "Job not found" },
+            },
+          },
+        },
         "/stores/{store_uuid}/inventory/items/{item_id}/batches": {
           parameters: [
             { in: "path", name: "store_uuid", required: true, schema: { type: "string" } },
@@ -564,6 +690,11 @@ export function buildOpenApiSpec() {
                           properties: {
                             item_id: { type: "string" },
                             quantity: { type: "integer", minimum: 1 },
+                            unit_discount: {
+                              type: "number",
+                              description:
+                                "Optional per-unit selling price for this line. Must be >= retail floor. If any line has this, overall discount_percent is ignored.",
+                            },
                           },
                           required: ["item_id", "quantity"],
                         },
@@ -574,7 +705,7 @@ export function buildOpenApiSpec() {
                         minimum: 0,
                         maximum: 100,
                         description:
-                          "Optional preview discount % applied ONLY to profit (display_subtotal_total - retail_floor_total). 100% means final_total equals retail_floor_total. No DB writes.",
+                          "Optional preview discount % applied ONLY to profit when no line has unit_discount. Ignored if any line has unit_discount.",
                       },
                     },
                     required: ["lines"],
@@ -628,11 +759,26 @@ export function buildOpenApiSpec() {
                           properties: {
                             item_id: { type: "string" },
                             quantity: { type: "integer", minimum: 1 },
+                            unit_discount: {
+                              type: "number",
+                              description:
+                                "Optional per-unit selling price for this line. Must be >= retail floor. If any line has this, overall discount_percent is forced to 0.",
+                            },
                           },
                           required: ["item_id", "quantity"],
                         },
                       },
                       discount_percent: { type: "number", minimum: 0, maximum: 100, example: 0 },
+                      username: {
+                        type: "string",
+                        example: "Ali Khan",
+                        description: "Optional customer name saved on the bill when provided.",
+                      },
+                      phone_number: {
+                        type: "string",
+                        example: "+92 300 1234567",
+                        description: "Optional customer phone saved on the bill when provided.",
+                      },
                     },
                     required: ["lines", "discount_percent"],
                   },
@@ -659,6 +805,93 @@ export function buildOpenApiSpec() {
             ],
             responses: {
               200: { description: "Paginated bills" },
+              400: { description: "Validation error" },
+              401: { description: "Unauthorized" },
+              403: { description: "Forbidden" },
+            },
+          },
+        },
+        "/stores/{store_uuid}/reports/sales-summary": {
+          parameters: [{ in: "path", name: "store_uuid", required: true, schema: { type: "string" } }],
+          get: {
+            tags: ["Stores — Reports"],
+            summary: "Sales summary for day, week, month, or year",
+            security: [{ bearerAuth: [] }],
+            parameters: [
+              { in: "query", name: "period", required: true, schema: { type: "string", enum: ["day", "week", "month", "year"] } },
+              { in: "query", name: "date", required: false, schema: { type: "string", example: "2025-03-18" } },
+              { in: "query", name: "scope", required: false, schema: { type: "string", enum: ["overall", "items"], default: "overall" } },
+            ],
+            responses: {
+              200: { description: "Store sales summary and optional per-item rows" },
+              400: { description: "Validation error" },
+              401: { description: "Unauthorized" },
+              403: { description: "Forbidden" },
+            },
+          },
+        },
+        "/stores/{store_uuid}/reports/profit-summary": {
+          parameters: [{ in: "path", name: "store_uuid", required: true, schema: { type: "string" } }],
+          get: {
+            tags: ["Stores — Reports"],
+            summary: "Profit after discount for day, week, month, or year",
+            security: [{ bearerAuth: [] }],
+            parameters: [
+              { in: "query", name: "period", required: true, schema: { type: "string", enum: ["day", "week", "month", "year"] } },
+              { in: "query", name: "date", required: false, schema: { type: "string", example: "2025-03-18" } },
+              { in: "query", name: "scope", required: false, schema: { type: "string", enum: ["overall", "items"], default: "overall" } },
+            ],
+            responses: {
+              200: { description: "Store profit summary and optional per-item rows" },
+              400: { description: "Validation error" },
+              401: { description: "Unauthorized" },
+              403: { description: "Forbidden" },
+            },
+          },
+        },
+        "/stores/{store_uuid}/reports/most-sold-items": {
+          parameters: [{ in: "path", name: "store_uuid", required: true, schema: { type: "string" } }],
+          get: {
+            tags: ["Stores — Reports"],
+            summary: "Most sold items ranked by quantity, revenue, or both",
+            security: [{ bearerAuth: [] }],
+            parameters: [
+              { in: "query", name: "period", required: true, schema: { type: "string", enum: ["day", "week", "month", "year"] } },
+              { in: "query", name: "date", required: false, schema: { type: "string", example: "2025-03-18" } },
+              { in: "query", name: "rank_by", required: false, schema: { type: "string", enum: ["quantity", "revenue", "both"], default: "both" } },
+              { in: "query", name: "limit", required: false, schema: { type: "number", example: 10 } },
+            ],
+            responses: {
+              200: { description: "Top items by quantity and/or revenue" },
+              400: { description: "Validation error" },
+              401: { description: "Unauthorized" },
+              403: { description: "Forbidden" },
+            },
+          },
+        },
+        "/stores/{store_uuid}/reports/sales-items": {
+          parameters: [{ in: "path", name: "store_uuid", required: true, schema: { type: "string" } }],
+          get: {
+            tags: ["Stores — Reports"],
+            summary: "List sold items with sale time (basic sales, no profit)",
+            security: [{ bearerAuth: [] }],
+            parameters: [
+              {
+                in: "query",
+                name: "period",
+                required: false,
+                schema: { type: "string", enum: ["day", "week", "month", "year"], default: "day" },
+                description: "Defaults to day (today when date omitted).",
+              },
+              { in: "query", name: "date", required: false, schema: { type: "string", example: "2026-07-16" } },
+              { in: "query", name: "limit", required: false, schema: { type: "number", example: 20 }, description: "Bills per page (1-50). Default 20." },
+              { in: "query", name: "cursor", required: false, schema: { type: "string" } },
+            ],
+            responses: {
+              200: {
+                description:
+                  "Flattened sold item rows for the page of bills, with sale_time from bill.created_at. Includes next_cursor.",
+              },
               400: { description: "Validation error" },
               401: { description: "Unauthorized" },
               403: { description: "Forbidden" },

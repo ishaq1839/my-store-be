@@ -1,6 +1,5 @@
 import { AppError } from "../../errors/AppError";
-
-
+import { requireEnv } from "../../config/env";
 import { getAuth } from "../firestoreAdmin";
 
 export type CreateAuthUserInput = {
@@ -64,5 +63,46 @@ export async function generatePasswordResetLink(email: string): Promise<string> 
     if (code === "auth/user-not-found") return "";
     throw err;
   }
+}
+
+/**
+ * Verify email/password against Firebase Auth (Identity Toolkit).
+ * Admin SDK cannot verify passwords; this uses the Firebase Web API key.
+ */
+export async function signInWithEmailPassword(input: {
+  email: string;
+  password: string;
+}): Promise<{ uid: string; email: string }> {
+  const apiKey = requireEnv("FIREBASE_WEB_API_KEY");
+  const email = String(input.email).trim().toLowerCase();
+  const password = String(input.password);
+
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+
+  const data = (await res.json()) as {
+    localId?: string;
+    email?: string;
+    error?: { message?: string; code?: number };
+  };
+
+  if (!res.ok || !data.localId) {
+    const msg = String(data.error?.message || "");
+    if (
+      msg.includes("INVALID_PASSWORD") ||
+      msg.includes("EMAIL_NOT_FOUND") ||
+      msg.includes("INVALID_LOGIN_CREDENTIALS") ||
+      msg.includes("USER_DISABLED")
+    ) {
+      throw new AppError("Invalid credentials", { statusCode: 401 });
+    }
+    throw new AppError(msg || "Authentication failed", { statusCode: 401 });
+  }
+
+  return { uid: String(data.localId), email: String(data.email || email) };
 }
 

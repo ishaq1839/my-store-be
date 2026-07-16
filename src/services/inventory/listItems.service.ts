@@ -69,7 +69,7 @@ export async function listInventoryItemsService(input: {
     for (const it of candidates) byId.set(it.uuid, it);
     const scored = Array.from(byId.values())
       .map((it) => ({ it, score: scoreItemForQuery(it, search, trigrams) }))
-      .filter((x) => x.score > 0)
+      .filter((x) => x.score > 0 && Number(x.it.total_items) > 0)
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return String(b.it.created_at).localeCompare(String(a.it.created_at));
@@ -80,14 +80,36 @@ export async function listInventoryItemsService(input: {
   }
 
   const cursor = decodeCursor(String(input.cursor || ""));
-  const res = await listInventoryItems({
-    store_uuid: input.store_uuid,
-    limit: input.limit,
-    cursor,
-  });
+  const inStock: InventoryItemRecord[] = [];
+  let nextCursor: { created_at: string; uuid: string } | null = cursor;
+  let safety = 0;
+
+  // Skip out-of-stock items while preserving pagination.
+  while (inStock.length < input.limit && safety < 8) {
+    safety += 1;
+    const res = await listInventoryItems({
+      store_uuid: input.store_uuid,
+      limit: Math.max(input.limit * 2, 20),
+      cursor: nextCursor,
+    });
+
+    for (const it of res.items) {
+      if (Number(it.total_items) > 0) inStock.push(it);
+      if (inStock.length >= input.limit) break;
+    }
+
+    nextCursor = res.next_cursor;
+    if (!res.next_cursor || res.items.length === 0) break;
+  }
+
+  const page = inStock.slice(0, input.limit);
+  const last = page[page.length - 1];
 
   return {
-    items: res.items,
-    next_cursor: res.next_cursor ? encodeCursor(res.next_cursor) : null,
+    items: page,
+    next_cursor:
+      page.length === input.limit && last?.created_at && last.uuid
+        ? encodeCursor({ created_at: String(last.created_at), uuid: String(last.uuid) })
+        : null,
   };
 }

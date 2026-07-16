@@ -1,7 +1,9 @@
 import { createContact } from "../../database/repos/contacts.repo";
+import { assertCanManageStoreInventory } from "../inventory/assertStoreInventoryAccess.service";
 
 export type CreateContactInput = {
-  owner_uuid: string;
+  actor: { uuid: string; role?: string };
+  store_uuid: string;
   name: string;
   description: string;
   address?: string;
@@ -9,6 +11,13 @@ export type CreateContactInput = {
 };
 
 export async function createContactService(input: CreateContactInput) {
-  return createContact(input);
+  await assertCanManageStoreInventory(input.actor, input.store_uuid);
+  return createContact({
+    owner_uuid: input.actor.uuid,
+    store_uuid: input.store_uuid,
+    name: input.name,
+    description: input.description,
+    address: input.address,
+    contact_number: input.contact_number,
+  });
 }
-

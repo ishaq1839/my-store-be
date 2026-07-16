@@ -3,6 +3,7 @@ import { z } from "zod";
 const billLineSchema = z.object({
   item_id: z.string().trim().min(1),
   quantity: z.coerce.number().int().positive(),
+  unit_discount: z.coerce.number().finite().positive().optional(),
 });
 
 const billLinesSchema = z.array(billLineSchema).min(1, "at least one line item is required");
@@ -16,6 +17,14 @@ export const billPreviewBodySchema = z.object({
 export const billFinalizeBodySchema = z.object({
   lines: billLinesSchema,
   discount_percent: z.coerce.number().finite().min(0, "discount_percent must be >= 0").max(100, "discount_percent must be <= 100"),
+  username: z.string().trim().min(1, "username is too short").max(120, "username is too long").optional(),
+  phone_number: z
+    .string()
+    .trim()
+    .min(7, "phone_number is too short")
+    .max(30, "phone_number is too long")
+    .regex(/^[0-9+()\-\s]+$/, "phone_number contains invalid characters")
+    .optional(),
 });
 
 export const billListQuerySchema = z.object({

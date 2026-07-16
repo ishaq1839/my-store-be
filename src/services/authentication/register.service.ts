@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import { createUser, getUserByEmail } from "../../database/repos/users.repo";
 import { AppError } from "../../errors/AppError";
 import { createAuthUser, deleteAuthUser, getAuthUserByEmail } from "../../database/repos/firebaseAuth.repo";
@@ -37,8 +36,6 @@ export async function register(input: RegisterInput): Promise<RegisterResponse> 
   const existingAuth = await getAuthUserByEmail(normalizedEmail);
   if (existingAuth) throw new AppError("Email already exists", { statusCode: 409 });
 
-  const password_hash = await bcrypt.hash(String(input.password), 10);
-
   const displayName = `${String(input.firstname).trim()} ${String(input.lastname).trim()}`.trim();
   const authUser = await createAuthUser({ email: normalizedEmail, password: input.password, displayName });
 
@@ -53,7 +50,6 @@ export async function register(input: RegisterInput): Promise<RegisterResponse> 
       firstname: input.firstname,
       lastname: input.lastname,
       role,
-      password_hash,
       auth_uid: authUser.uid,
       email_lower,
       full_name_lower,
@@ -77,4 +73,3 @@ export async function register(input: RegisterInput): Promise<RegisterResponse> 
     lastname: String(input.lastname).trim(),
   };
 }
-

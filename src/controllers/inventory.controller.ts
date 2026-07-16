@@ -4,6 +4,10 @@ import { createItemBatchService } from "../services/inventory/createItemBatch.se
 import { listInventoryItemsService } from "../services/inventory/listItems.service";
 import { listBatchesService } from "../services/inventory/listBatches.service";
 import { sellFromBatchesService } from "../services/inventory/sellFromBatches.service";
+import {
+  enqueueBulkCreateItemsService,
+  getBulkImportJobService,
+} from "../services/inventory/bulkCreateItems.service";
 
 function itemPayload(it: {
   uuid: string;
@@ -61,6 +65,51 @@ export async function inventoryCreateItemBatchController(req: Request, res: Resp
       created_new_item: result.created_new_item,
       item: itemPayload(result.item),
     });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function inventoryBulkCreateItemsController(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.uuid) throw new AppError("Unauthorized", { statusCode: 401 });
+    const store_uuid = String(req.params.store_uuid || "");
+    const body = req.body as {
+      items: {
+        type: "single" | "carton";
+        name: string;
+        description: string;
+        retail_price: number;
+        sale_price?: number | null;
+        total_items: number;
+      }[];
+    };
+
+    const result = await enqueueBulkCreateItemsService({
+      actor: { uuid: req.user.uuid, role: req.user.role },
+      store_uuid,
+      items: body.items,
+    });
+
+    return res.status(202).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function inventoryBulkImportJobStatusController(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.uuid) throw new AppError("Unauthorized", { statusCode: 401 });
+    const store_uuid = String(req.params.store_uuid || "");
+    const job_id = String(req.params.job_id || "");
+
+    const result = await getBulkImportJobService({
+      actor: { uuid: req.user.uuid, role: req.user.role },
+      store_uuid,
+      job_id,
+    });
+
+    return res.status(200).json(result);
   } catch (err) {
     return next(err);
   }

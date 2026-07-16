@@ -4,7 +4,7 @@ import { AppError } from "../../errors/AppError";
 export type UserRecord = {
   uuid: string;
   email: string;
-  password_hash: string;
+  password_hash?: string;
   role?: string;
   firstname?: string;
   lastname?: string;
@@ -24,13 +24,15 @@ export async function getUserByEmail(email: string): Promise<UserRecord | null> 
   if (snap.empty) return null;
 
   const data = snap.docs[0].data() as Partial<UserRecord>;
-  if (!data.uuid || !data.email || !data.password_hash) return null;
+  if (!data.uuid || !data.email) return null;
 
   return {
     uuid: String(data.uuid),
     email: String(data.email),
-    password_hash: String(data.password_hash),
+    password_hash: data.password_hash ? String(data.password_hash) : undefined,
     role: data.role ? String(data.role) : undefined,
+    firstname: data.firstname ? String(data.firstname) : undefined,
+    lastname: data.lastname ? String(data.lastname) : undefined,
     auth_uid: data.auth_uid ? String(data.auth_uid) : undefined,
     email_lower: data.email_lower ? String(data.email_lower) : undefined,
     full_name_lower: data.full_name_lower ? String(data.full_name_lower) : undefined,
@@ -47,13 +49,15 @@ export async function getUserByUuid(uuid: string): Promise<UserRecord | null> {
   if (!doc.exists) return null;
 
   const data = doc.data() as Partial<UserRecord> | undefined;
-  if (!data?.uuid || !data.email || data.password_hash === undefined) return null;
+  if (!data?.uuid || !data.email) return null;
 
   return {
     uuid: String(data.uuid),
     email: String(data.email),
-    password_hash: String(data.password_hash),
+    password_hash: data.password_hash ? String(data.password_hash) : undefined,
     role: data.role ? String(data.role) : undefined,
+    firstname: data.firstname ? String(data.firstname) : undefined,
+    lastname: data.lastname ? String(data.lastname) : undefined,
     auth_uid: data.auth_uid ? String(data.auth_uid) : undefined,
     email_lower: data.email_lower ? String(data.email_lower) : undefined,
     full_name_lower: data.full_name_lower ? String(data.full_name_lower) : undefined,
@@ -66,7 +70,6 @@ export type CreateUserInput = {
   firstname: string;
   lastname: string;
   role: string;
-  password_hash: string;
   auth_uid: string;
   email_lower: string;
   full_name_lower: string;
@@ -98,7 +101,6 @@ export async function createUser(input: CreateUserInput): Promise<Pick<UserRecor
     auth_uid: String(input.auth_uid),
     created_at: now,
     updated_at: now,
-    password_hash: String(input.password_hash),
   });
 
   return { uuid, email: normalizedEmail, role: String(input.role || "user") };

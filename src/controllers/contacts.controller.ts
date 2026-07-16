@@ -8,13 +8,22 @@ export async function createContactController(req: Request, res: Response, next:
     const owner_uuid = req.user?.uuid;
     if (!owner_uuid) throw new AppError("Unauthorized", { statusCode: 401 });
 
+    const store_uuid = String(req.params.store_uuid || "");
     const { name, description, address, contact_number } = req.body as {
       name: string;
       description: string;
       address?: string;
       contact_number?: string;
     };
-    const created = await createContactService({ owner_uuid, name, description, address, contact_number });
+
+    const created = await createContactService({
+      actor: { uuid: owner_uuid, role: req.user?.role },
+      store_uuid,
+      name,
+      description,
+      address,
+      contact_number,
+    });
     return res.status(201).json(created);
   } catch (err) {
     return next(err);
@@ -26,10 +35,13 @@ export async function listContactsController(req: Request, res: Response, next: 
     const owner_uuid = req.user?.uuid;
     if (!owner_uuid) throw new AppError("Unauthorized", { statusCode: 401 });
 
-    const contacts = await listContactsService(owner_uuid);
+    const store_uuid = String(req.params.store_uuid || "");
+    const contacts = await listContactsService({
+      actor: { uuid: owner_uuid, role: req.user?.role },
+      store_uuid,
+    });
     return res.status(200).json({ contacts });
   } catch (err) {
     return next(err);
   }
 }
-

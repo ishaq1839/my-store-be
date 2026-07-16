@@ -4,7 +4,7 @@ import { validateBody } from "../middleware/validate";
 import { createContactController, listContactsController } from "../controllers/contacts.controller";
 import { contactCreateBodySchema } from "../validators/contacts.validators";
 
-export const contactsRouter = Router();
+export const contactsRouter = Router({ mergeParams: true });
 
 contactsRouter.use(requireAuth);
 

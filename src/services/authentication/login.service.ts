@@ -5,10 +5,14 @@ export type LoginInput = {
 
 export type StoreDto = {
   uuid: string;
+  owner_id: string;
   created_at: string;
   updated_at: string;
   name: string;
   description: string;
+  address: string;
+  status: string;
+  subscription_status: string;
 };
 
 export type LoginResponse = {
@@ -20,12 +24,12 @@ export type LoginResponse = {
   store: StoreDto[];
 };
 
-import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireEnv } from "../../config/env";
 import { AppError } from "../../errors/AppError";
 import { getUserByEmail } from "../../database/repos/users.repo";
 import { getStoresForUserUuid } from "../../database/repos/stores.repo";
+import { signInWithEmailPassword } from "../../database/repos/firebaseAuth.repo";
 
 function unauthorized(): AppError {
   return new AppError("Invalid credentials", { statusCode: 401 });
@@ -35,11 +39,11 @@ export async function login(input: LoginInput): Promise<LoginResponse> {
   const email = String(input.email).trim().toLowerCase();
   const password = String(input.password);
 
+  // Password verified by Firebase Auth (not Firestore hash).
+  await signInWithEmailPassword({ email, password });
+
   const user = await getUserByEmail(email);
   if (!user) throw unauthorized();
-
-  const ok = await bcrypt.compare(password, user.password_hash);
-  if (!ok) throw unauthorized();
 
   const accessSecret = requireEnv("ACCESS_TOKEN_SECRET");
   const refreshSecret = requireEnv("REFRESH_TOKEN_SECRET");
@@ -61,4 +65,3 @@ export async function login(input: LoginInput): Promise<LoginResponse> {
     store,
   };
 }
-

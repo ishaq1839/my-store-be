@@ -10,7 +10,7 @@ export async function billsPreviewController(req: Request, res: Response, next: 
     if (!req.user?.uuid) throw new AppError("Unauthorized", { statusCode: 401 });
     const store_uuid = String(req.params.store_uuid || "");
     const body = req.body as {
-      lines: { item_id: string; quantity: number }[];
+      lines: { item_id: string; quantity: number; unit_discount?: number }[];
       final_total?: number;
       discount_percent?: number;
     };
@@ -33,13 +33,20 @@ export async function billsFinalizeController(req: Request, res: Response, next:
   try {
     if (!req.user?.uuid) throw new AppError("Unauthorized", { statusCode: 401 });
     const store_uuid = String(req.params.store_uuid || "");
-    const body = req.body as { lines: { item_id: string; quantity: number }[]; discount_percent: number };
+    const body = req.body as {
+      lines: { item_id: string; quantity: number; unit_discount?: number }[];
+      discount_percent: number;
+      username?: string;
+      phone_number?: string;
+    };
 
     const bill = await finalizeBillService({
       actor: { uuid: req.user.uuid, role: req.user.role },
       store_uuid,
       lines: body.lines,
       discount_percent: body.discount_percent,
+      username: body.username,
+      phone_number: body.phone_number,
     });
 
     return res.status(201).json(bill);

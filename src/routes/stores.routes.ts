@@ -5,6 +5,8 @@ import { createStoreController, listStoresController } from "../controllers/stor
 import { storeCreateBodySchema, storeListQuerySchema } from "../validators/stores.validators";
 import { inventoryRouter } from "./inventory.routes";
 import { billsRouter } from "./bills.routes";
+import { reportsRouter } from "./reports.routes";
+import { contactsRouter } from "./contacts.routes";
 
 export const storesRouter = Router();
 
@@ -14,4 +16,6 @@ storesRouter.post("/", validateBody(storeCreateBodySchema), createStoreControlle
 storesRouter.get("/", validateQuery(storeListQuerySchema), listStoresController);
 storesRouter.use("/:store_uuid/inventory", inventoryRouter);
 storesRouter.use("/:store_uuid/bills", billsRouter);
+storesRouter.use("/:store_uuid/reports", reportsRouter);
+storesRouter.use("/:store_uuid/contacts", contactsRouter);
 

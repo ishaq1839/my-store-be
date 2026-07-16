@@ -46,3 +46,22 @@ export const inventoryListItemsQuerySchema = z.object({
 export const inventorySellBodySchema = z.object({
   quantity: z.coerce.number().int().positive("quantity must be a positive integer"),
 });
+
+/** Single new-item row for bulk create (no item_id / add-batch). */
+export const inventoryBulkItemSchema = z.object({
+  type: z.enum(["single", "carton"]),
+  name: z.string().trim().min(1, "name is required").max(200, "name is too long"),
+  description: z.string().trim().min(1, "description is required").max(2000, "description is too long"),
+  retail_price: z.coerce.number().positive("retail_price must be positive"),
+  sale_price: z.union([z.coerce.number().nonnegative(), z.null()]).optional(),
+  total_items: z.coerce.number().int().positive("total_items must be a positive integer"),
+});
+
+export const inventoryBulkCreateBodySchema = z.object({
+  items: z
+    .array(inventoryBulkItemSchema)
+    .min(1, "items must contain at least 1 row")
+    .max(100, "items cannot exceed 100 rows per request"),
+});
+
+export type InventoryBulkCreateBody = z.infer<typeof inventoryBulkCreateBodySchema>;

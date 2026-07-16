@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import { AppError } from "../../../errors/AppError";
 import { createAuthUser, deleteAuthUser, getAuthUserByEmail } from "../../../database/repos/firebaseAuth.repo";
 import { createUser, getUserByEmail } from "../../../database/repos/users.repo";
@@ -31,7 +30,6 @@ export async function adminCreateUser(input: AdminCreateUserInput): Promise<Admi
   const displayName = `${String(input.firstname).trim()} ${String(input.lastname).trim()}`.trim();
   const authUser = await createAuthUser({ email: normalizedEmail, password: input.password, displayName });
 
-  const password_hash = await bcrypt.hash(String(input.password), 10);
   const email_lower = buildEmailLower(normalizedEmail);
   const full_name_lower = buildFullNameLower(input.firstname, input.lastname);
   const search_trigrams = buildTrigrams(`${full_name_lower} ${email_lower}`);
@@ -42,7 +40,6 @@ export async function adminCreateUser(input: AdminCreateUserInput): Promise<Admi
       firstname: input.firstname,
       lastname: input.lastname,
       role: "user",
-      password_hash,
       auth_uid: authUser.uid,
       email_lower,
       full_name_lower,
@@ -65,4 +62,3 @@ export async function adminCreateUser(input: AdminCreateUserInput): Promise<Admi
     throw err;
   }
 }
-

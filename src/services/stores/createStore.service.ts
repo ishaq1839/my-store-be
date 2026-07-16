@@ -1,6 +1,7 @@
 import { AppError } from "../../errors/AppError";
 import { getUserByUuid } from "../../database/repos/users.repo";
 import { createStore, type StoreRecord } from "../../database/repos/storesNew.repo";
+import { assignStoreToUser } from "../../database/repos/stores.repo";
 import { buildEmailLower, buildFullNameLower, buildTrigrams, normalizeSpaces } from "../admin/users/searchTokens";
 
 export type CreateStoreInput = {
@@ -10,10 +11,21 @@ export type CreateStoreInput = {
   description: string;
   status?: "active" | "inactive";
   subscription_status?: "free" | "subscribed";
+  /** Admin only: assign store ownership to another user. */
+  owner_id?: string;
 };
 
 export async function createStoreService(input: CreateStoreInput): Promise<StoreRecord> {
-  const owner_id = String(input.actor.uuid);
+  const actorRole = String(input.actor.role || "").toLowerCase();
+  const requestedOwnerId = input.owner_id ? String(input.owner_id).trim() : "";
+
+  let owner_id = String(input.actor.uuid);
+  if (requestedOwnerId && requestedOwnerId !== owner_id) {
+    if (actorRole !== "admin") {
+      throw new AppError("Only admin can assign a store to another user", { statusCode: 403 });
+    }
+    owner_id = requestedOwnerId;
+  }
 
   const owner = await getUserByUuid(owner_id);
   if (!owner) throw new AppError("owner_id not found", { statusCode: 404 });
@@ -23,7 +35,7 @@ export async function createStoreService(input: CreateStoreInput): Promise<Store
   const name_lower = normalizeSpaces(input.name);
   const search_trigrams = buildTrigrams(`${name_lower} ${owner_name_lower} ${owner_email_lower}`);
 
-  return createStore({
+  const created = await createStore({
     owner_id,
     name: input.name,
     name_lower,
@@ -35,5 +47,9 @@ export async function createStoreService(input: CreateStoreInput): Promise<Store
     status: input.status || "active",
     subscription_status: input.subscription_status || "free",
   });
-}
 
+  // Keep login store resolution working for owned + assigned stores.
+  await assignStoreToUser({ user_uuid: owner_id, store_uuid: created.uuid });
+
+  return created;
+}

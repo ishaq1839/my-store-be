@@ -6,6 +6,7 @@ export const storeCreateBodySchema = z.object({
   description: z.string().trim().min(1, "description is required").max(2000, "description is too long"),
   status: z.enum(["active", "inactive"]).optional().default("active"),
   subscription_status: z.enum(["free", "subscribed"]).optional().default("free"),
+  owner_id: z.string().trim().min(1).optional(),
 });
 
 export type StoreCreateBody = z.infer<typeof storeCreateBodySchema>;
