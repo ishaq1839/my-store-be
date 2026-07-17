@@ -3,6 +3,7 @@ import { assertCanManageStoreInventory } from "../inventory/assertStoreInventory
 import type { ReportPeriod } from "../bills/summaryDocIds";
 import { periodRangeIso, summaryDocIdForPeriod, anchorIsoFromDate } from "../bills/summaryDocIds";
 import { roundMoney } from "../bills/fifoBillAllocate";
+import { reportCacheKey, withReportCache } from "./reportsCache";
 
 export type SoldItemRow = {
   bill_id: string;
@@ -38,45 +39,60 @@ export async function getSalesItemsReportService(input: {
   date: string;
   limit: number;
   cursor?: string;
+  refresh?: boolean;
 }) {
   await assertCanManageStoreInventory(input.actor, input.store_uuid);
 
   const range = periodRangeIso(input.period, input.date);
   const summary_doc_id = summaryDocIdForPeriod(input.period, anchorIsoFromDate(input.date));
-  const cursor = decodeCursor(String(input.cursor || ""));
+  const cursorRaw = String(input.cursor || "");
 
-  const page = await listBillsInRange({
-    store_uuid: input.store_uuid,
-    from_iso: range.from_iso,
-    to_iso: range.to_iso,
-    limit: input.limit,
-    cursor,
-  });
+  return withReportCache({
+    key: reportCacheKey([
+      "sales-items",
+      input.store_uuid,
+      summary_doc_id,
+      input.limit,
+      cursorRaw,
+    ]),
+    forceRefresh: Boolean(input.refresh),
+    loader: async () => {
+      const cursor = decodeCursor(cursorRaw);
 
-  const items: SoldItemRow[] = [];
-  for (const bill of page.bills) {
-    const sale_time = String(bill.created_at);
-    for (const line of bill.lines || []) {
-      items.push({
-        bill_id: String(bill.bill_id),
-        item_id: String(line.item_id),
-        item_name: String(line.item_name || ""),
-        quantity: Number(line.quantity) || 0,
-        sale_amount: roundMoney(Number(line.display_subtotal) || 0),
-        sale_time,
+      const page = await listBillsInRange({
+        store_uuid: input.store_uuid,
+        from_iso: range.from_iso,
+        to_iso: range.to_iso,
+        limit: input.limit,
+        cursor,
       });
-    }
-  }
 
-  return {
-    period: input.period,
-    date: input.date,
-    summary_doc_id,
-    from: range.from_iso,
-    to: range.to_iso,
-    total_quantity: items.reduce((s, r) => s + r.quantity, 0),
-    total_sale_amount: roundMoney(items.reduce((s, r) => s + r.sale_amount, 0)),
-    items,
-    next_cursor: page.next_cursor ? encodeCursor(page.next_cursor) : null,
-  };
+      const items: SoldItemRow[] = [];
+      for (const bill of page.bills) {
+        const sale_time = String(bill.created_at);
+        for (const line of bill.lines || []) {
+          items.push({
+            bill_id: String(bill.bill_id),
+            item_id: String(line.item_id),
+            item_name: String(line.item_name || ""),
+            quantity: Number(line.quantity) || 0,
+            sale_amount: roundMoney(Number(line.display_subtotal) || 0),
+            sale_time,
+          });
+        }
+      }
+
+      return {
+        period: input.period,
+        date: input.date,
+        summary_doc_id,
+        from: range.from_iso,
+        to: range.to_iso,
+        total_quantity: items.reduce((s, r) => s + r.quantity, 0),
+        total_sale_amount: roundMoney(items.reduce((s, r) => s + r.sale_amount, 0)),
+        items,
+        next_cursor: page.next_cursor ? encodeCursor(page.next_cursor) : null,
+      };
+    },
+  });
 }

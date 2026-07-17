@@ -1,11 +1,12 @@
-import { assertCanManageStoreInventory } from "./assertStoreInventoryAccess.service";
-import {
-  listInventoryItems,
-  searchInventoryItemsByTrigrams,
-  searchInventoryItemsByPrefix,
-  type InventoryItemRecord,
-} from "../../database/repos/inventoryItems.repo";
+import { assertCanSellAtStore } from "./assertStoreInventoryAccess.service";
+import { type InventoryItemRecord } from "../../database/repos/inventoryItems.repo";
+import { isServiceItem } from "./inventoryItemTypes";
+import { getStoreItems } from "./inventoryStoreCache";
 import { normalizeSpaces, pickQueryTrigrams } from "../admin/users/searchTokens";
+
+function itemIsVisible(it: InventoryItemRecord): boolean {
+  return Number(it.total_items) > 0 || isServiceItem(it.type);
+}
 
 function encodeCursor(c: { created_at: string; uuid: string }): string {
   return Buffer.from(`${c.created_at}|${c.uuid}`, "utf8").toString("base64url");
@@ -40,6 +41,22 @@ function scoreItemForQuery(item: InventoryItemRecord, query: string, queryTrigra
   return score;
 }
 
+function compareCreatedDesc(a: InventoryItemRecord, b: InventoryItemRecord): number {
+  const byCreated = String(b.created_at).localeCompare(String(a.created_at));
+  if (byCreated !== 0) return byCreated;
+  return String(b.uuid).localeCompare(String(a.uuid));
+}
+
+function isAfterCursor(
+  item: InventoryItemRecord,
+  cursor: { created_at: string; uuid: string },
+): boolean {
+  const byCreated = String(item.created_at).localeCompare(String(cursor.created_at));
+  if (byCreated < 0) return true;
+  if (byCreated > 0) return false;
+  return String(item.uuid).localeCompare(String(cursor.uuid)) < 0;
+}
+
 export async function listInventoryItemsService(input: {
   actor: { uuid: string; role?: string };
   store_uuid: string;
@@ -47,62 +64,32 @@ export async function listInventoryItemsService(input: {
   limit: number;
   cursor?: string;
 }) {
-  await assertCanManageStoreInventory(input.actor, input.store_uuid);
+  await assertCanSellAtStore(input.actor, input.store_uuid);
 
+  const { items: all, source } = await getStoreItems(input.store_uuid);
   const search = normalizeSpaces(String(input.search || ""));
 
   if (search) {
     const trigrams = pickQueryTrigrams(search);
-    const candidates =
-      trigrams.length > 0
-        ? await searchInventoryItemsByTrigrams({
-            store_uuid: input.store_uuid,
-            trigrams,
-            limit: 80,
-          })
-        : await searchInventoryItemsByPrefix({
-            store_uuid: input.store_uuid,
-            prefix: search.toLowerCase(),
-            limit: 80,
-          });
-    const byId = new Map<string, InventoryItemRecord>();
-    for (const it of candidates) byId.set(it.uuid, it);
-    const scored = Array.from(byId.values())
+    const scored = all
       .map((it) => ({ it, score: scoreItemForQuery(it, search, trigrams) }))
-      .filter((x) => x.score > 0 && Number(x.it.total_items) > 0)
+      .filter((x) => x.score > 0 && itemIsVisible(x.it))
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return String(b.it.created_at).localeCompare(String(a.it.created_at));
       });
 
     const page = scored.slice(0, input.limit).map((x) => x.it);
-    return { items: page, next_cursor: null as string | null };
+    return { items: page, next_cursor: null as string | null, source };
   }
 
   const cursor = decodeCursor(String(input.cursor || ""));
-  const inStock: InventoryItemRecord[] = [];
-  let nextCursor: { created_at: string; uuid: string } | null = cursor;
-  let safety = 0;
+  const visible = all
+    .filter(itemIsVisible)
+    .sort(compareCreatedDesc)
+    .filter((it) => (cursor ? isAfterCursor(it, cursor) : true));
 
-  // Skip out-of-stock items while preserving pagination.
-  while (inStock.length < input.limit && safety < 8) {
-    safety += 1;
-    const res = await listInventoryItems({
-      store_uuid: input.store_uuid,
-      limit: Math.max(input.limit * 2, 20),
-      cursor: nextCursor,
-    });
-
-    for (const it of res.items) {
-      if (Number(it.total_items) > 0) inStock.push(it);
-      if (inStock.length >= input.limit) break;
-    }
-
-    nextCursor = res.next_cursor;
-    if (!res.next_cursor || res.items.length === 0) break;
-  }
-
-  const page = inStock.slice(0, input.limit);
+  const page = visible.slice(0, input.limit);
   const last = page[page.length - 1];
 
   return {
@@ -111,5 +98,6 @@ export async function listInventoryItemsService(input: {
       page.length === input.limit && last?.created_at && last.uuid
         ? encodeCursor({ created_at: String(last.created_at), uuid: String(last.uuid) })
         : null,
+    source,
   };
 }

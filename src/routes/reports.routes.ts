@@ -6,12 +6,14 @@ import {
   profitSummaryReportController,
   salesItemsReportController,
   salesSummaryReportController,
+  staffPerformanceReportController,
 } from "../controllers/reports.controller";
 import {
   mostSoldItemsQuerySchema,
   profitSummaryQuerySchema,
   salesItemsQuerySchema,
   salesSummaryQuerySchema,
+  staffPerformanceQuerySchema,
 } from "../validators/reports.validators";
 
 export const reportsRouter = Router({ mergeParams: true });
@@ -22,3 +24,8 @@ reportsRouter.get("/sales-summary", validateQuery(salesSummaryQuerySchema), sale
 reportsRouter.get("/profit-summary", validateQuery(profitSummaryQuerySchema), profitSummaryReportController);
 reportsRouter.get("/most-sold-items", validateQuery(mostSoldItemsQuerySchema), mostSoldItemsReportController);
 reportsRouter.get("/sales-items", validateQuery(salesItemsQuerySchema), salesItemsReportController);
+reportsRouter.get(
+  "/staff-performance",
+  validateQuery(staffPerformanceQuerySchema),
+  staffPerformanceReportController,
+);

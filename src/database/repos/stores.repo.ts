@@ -1,4 +1,5 @@
 import { getDb } from "../firestoreAdmin";
+import { assignStoreToUser as assignStoreMembership } from "./storeStaff.repo";
 
 export type StoreRecord = {
   uuid: string;
@@ -71,19 +72,15 @@ function pushStore(map: Map<string, StoreDto>, data: Partial<StoreRecord>) {
   );
 }
 
-export async function assignStoreToUser(input: { user_uuid: string; store_uuid: string }): Promise<void> {
-  const db = getDb();
-  const user_uuid = String(input.user_uuid);
-  const store_uuid = String(input.store_uuid);
-  const id = `${user_uuid}_${store_uuid}`;
-  await db.collection("user_stores").doc(id).set(
-    {
-      user_uuid,
-      store_uuid,
-      updated_at: new Date().toISOString(),
-    },
-    { merge: true }
-  );
+export async function assignStoreToUser(input: {
+  user_uuid: string;
+  store_uuid: string;
+  store_role?: "owner" | "staff";
+  email?: string;
+  firstname?: string;
+  lastname?: string;
+}): Promise<void> {
+  await assignStoreMembership(input);
 }
 
 export async function getStoresForUserUuid(userUuid: string): Promise<StoreDto[]> {

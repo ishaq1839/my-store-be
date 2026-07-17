@@ -4,14 +4,17 @@ import { createItemBatchService } from "../services/inventory/createItemBatch.se
 import { listInventoryItemsService } from "../services/inventory/listItems.service";
 import { listBatchesService } from "../services/inventory/listBatches.service";
 import { sellFromBatchesService } from "../services/inventory/sellFromBatches.service";
+import { updateItemPricesService } from "../services/inventory/updateItemPrices.service";
 import {
   enqueueBulkCreateItemsService,
   getBulkImportJobService,
 } from "../services/inventory/bulkCreateItems.service";
 
+import type { InventoryItemType } from "../services/inventory/inventoryItemTypes";
+
 function itemPayload(it: {
   uuid: string;
-  type?: "single" | "carton";
+  type?: InventoryItemType;
   name: string;
   description: string;
   short_code: string;
@@ -37,12 +40,12 @@ export async function inventoryCreateItemBatchController(req: Request, res: Resp
     const store_uuid = String(req.params.store_uuid || "");
     const body = req.body as {
       item_id?: string;
-      type?: "single" | "carton";
+      type?: InventoryItemType;
       name?: string;
       description?: string;
       retail_price: number;
       sale_price?: number;
-      total_items: number;
+      total_items?: number;
     };
 
     const result = await createItemBatchService({
@@ -76,12 +79,12 @@ export async function inventoryBulkCreateItemsController(req: Request, res: Resp
     const store_uuid = String(req.params.store_uuid || "");
     const body = req.body as {
       items: {
-        type: "single" | "carton";
+        type: InventoryItemType;
         name: string;
         description: string;
         retail_price: number;
         sale_price?: number | null;
-        total_items: number;
+        total_items?: number;
       }[];
     };
 
@@ -136,6 +139,7 @@ export async function inventoryListItemsController(req: Request, res: Response, 
     return res.status(200).json({
       items: result.items.map(itemPayload),
       next_cursor: result.next_cursor,
+      source: result.source,
     });
   } catch (err) {
     return next(err);
@@ -185,6 +189,43 @@ export async function inventorySellController(req: Request, res: Response, next:
     });
 
     return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function inventoryUpdateItemPricesController(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.uuid) throw new AppError("Unauthorized", { statusCode: 401 });
+    const store_uuid = String(req.params.store_uuid || "");
+    const item_id = String(req.params.item_id || "");
+    const body = req.body as {
+      retail_price: number;
+      sale_price?: number | null;
+      total_items?: number;
+    };
+
+    const result = await updateItemPricesService({
+      actor: { uuid: req.user.uuid, role: req.user.role },
+      store_uuid,
+      item_id,
+      retail_price: body.retail_price,
+      sale_price: body.sale_price,
+      total_items: body.total_items,
+    });
+
+    return res.status(200).json({
+      item_id: result.item_id,
+      batch_id: result.batch_id,
+      repriced_quantity: result.repriced_quantity,
+      previous_quantity: result.previous_quantity,
+      previous_retail_price: result.previous_retail_price,
+      previous_sale_price: result.previous_sale_price,
+      current_retail_price: result.current_retail_price,
+      current_sale_price: result.current_sale_price,
+      total_items: result.total_items,
+      item: itemPayload(result.item),
+    });
   } catch (err) {
     return next(err);
   }

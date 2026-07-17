@@ -17,6 +17,10 @@ export type CreateStoreInput = {
 
 export async function createStoreService(input: CreateStoreInput): Promise<StoreRecord> {
   const actorRole = String(input.actor.role || "").toLowerCase();
+  if (actorRole === "staff") {
+    throw new AppError("Staff cannot create stores", { statusCode: 403 });
+  }
+
   const requestedOwnerId = input.owner_id ? String(input.owner_id).trim() : "";
 
   let owner_id = String(input.actor.uuid);
@@ -49,7 +53,14 @@ export async function createStoreService(input: CreateStoreInput): Promise<Store
   });
 
   // Keep login store resolution working for owned + assigned stores.
-  await assignStoreToUser({ user_uuid: owner_id, store_uuid: created.uuid });
+  await assignStoreToUser({
+    user_uuid: owner_id,
+    store_uuid: created.uuid,
+    store_role: "owner",
+    email: owner.email,
+    firstname: owner.firstname,
+    lastname: owner.lastname,
+  });
 
   return created;
 }

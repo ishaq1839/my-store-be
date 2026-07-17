@@ -1,26 +1,48 @@
 import { AppError } from "../../errors/AppError";
-import { assertCanManageStoreInventory } from "../inventory/assertStoreInventoryAccess.service";
+import {
+  assertCanSellAtStore,
+  assertStaffCannotApplyDiscounts,
+} from "../inventory/assertStoreInventoryAccess.service";
+import { invalidateStoreInventoryCache } from "../inventory/inventoryStoreCache";
 import { finalizeBillInTransaction } from "../../database/repos/bills.repo";
+import { getUserByUuid } from "../../database/repos/users.repo";
+import type { BillLineInput } from "./fifoBillAllocate";
 
 export async function finalizeBillService(input: {
   actor: { uuid: string; role?: string };
   store_uuid: string;
-  lines: { item_id: string; quantity: number; unit_discount?: number }[];
+  lines: BillLineInput[];
   discount_percent: number;
   username?: string;
   phone_number?: string;
 }) {
-  await assertCanManageStoreInventory(input.actor, input.store_uuid);
+  const accessCtx = await assertCanSellAtStore(input.actor, input.store_uuid);
+
+  assertStaffCannotApplyDiscounts({
+    access: accessCtx.access,
+    lines: input.lines,
+    discount_percent: input.discount_percent,
+  });
+
+  const seller = await getUserByUuid(input.actor.uuid);
+  const seller_name = seller
+    ? `${String(seller.firstname || "").trim()} ${String(seller.lastname || "").trim()}`.trim()
+    : undefined;
 
   try {
-    return await finalizeBillInTransaction({
+    const bill = await finalizeBillInTransaction({
       store_uuid: input.store_uuid,
       created_by: input.actor.uuid,
+      seller_id: input.actor.uuid,
+      seller_email: seller?.email,
+      seller_name: seller_name || undefined,
       lines: input.lines,
-      discount_percent: input.discount_percent,
+      discount_percent: accessCtx.access === "staff" ? 0 : input.discount_percent,
       username: input.username,
       phone_number: input.phone_number,
     });
+    invalidateStoreInventoryCache(input.store_uuid);
+    return bill;
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string };
     if (err.code === "DISCOUNT_TOO_HIGH") {

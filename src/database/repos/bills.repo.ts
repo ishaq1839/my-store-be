@@ -2,7 +2,9 @@ import { FieldValue } from "firebase-admin/firestore";
 import { getDb } from "../firestoreAdmin";
 import type { InventoryBatchRecord } from "./inventoryBatches.repo";
 import type { InventoryItemRecord } from "./inventoryItems.repo";
-import { fifoAllocateForBill, mergeBillLines, roundMoney, applyUnitDiscountToAllocation, hasAnyUnitDiscount } from "../../services/bills/fifoBillAllocate";
+import { fifoAllocateForBill, normalizeBillLines, roundMoney, applyUnitDiscountToAllocation, hasAnyUnitDiscount, allocateServiceLine, allocateCustomLine, computeBillTotals } from "../../services/bills/fifoBillAllocate";
+import type { BillLineInput } from "../../services/bills/fifoBillAllocate";
+import { isServiceItem } from "../../services/inventory/inventoryItemTypes";
 import {
   dailySummaryDocId,
   monthlySummaryDocId,
@@ -11,13 +13,18 @@ import {
 } from "../../services/bills/summaryDocIds";
 
 export type BillLineSnapshot = {
+  kind?: "item" | "custom";
   item_id: string;
   item_name: string;
   quantity: number;
   retail_subtotal: number;
   display_subtotal: number;
+  /** Fixed unit price for custom lines. */
+  unit_price?: number;
   /** Present when this line used a per-unit selling price override. */
   unit_discount?: number;
+  /** False for custom lines — never discounted. */
+  discountable?: boolean;
   fifo_chunks: {
     batch_id: string;
     quantity: number;
@@ -32,12 +39,18 @@ export type BillRecord = {
   store_uuid: string;
   created_at: string;
   created_by: string;
+  /** User uuid who sold/finalized this bill (owner or staff). Used for staff KPIs. */
+  seller_id: string;
+  seller_email?: string;
+  seller_name?: string;
   lines: BillLineSnapshot[];
   discount_percent: number;
   discount_amount: number;
   display_subtotal_total: number;
   retail_floor_total: number;
   final_total: number;
+  /** Sum of custom (non-inventory) charges; never discounted. */
+  custom_charges_total?: number;
   /** True when any line used unit_discount; overall discount_percent was forced to 0. */
   unit_discount_mode?: boolean;
   /** Optional customer name captured at checkout. */
@@ -77,6 +90,16 @@ function itemSummaryRef(store_uuid: string, periodDocId: string, item_id: string
     .doc(String(item_id));
 }
 
+function staffSummaryRef(store_uuid: string, periodDocId: string, seller_id: string) {
+  return getDb()
+    .collection("stores")
+    .doc(String(store_uuid))
+    .collection("staff_sales_summary")
+    .doc(periodDocId)
+    .collection("sellers")
+    .doc(String(seller_id));
+}
+
 export async function listBillsInRange(opts: {
   store_uuid: string;
   from_iso: string;
@@ -102,6 +125,12 @@ export async function listBillsInRange(opts: {
   const next_cursor =
     last?.created_at && last.bill_id ? { created_at: String(last.created_at), bill_id: String(last.bill_id) } : null;
   return { bills, next_cursor };
+}
+
+export async function getBillById(store_uuid: string, bill_id: string): Promise<BillRecord | null> {
+  const snap = await billsCol(store_uuid).doc(String(bill_id)).get();
+  if (!snap.exists) return null;
+  return snap.data() as BillRecord;
 }
 
 /** Fetch all bills in a range (paged) for report flattening. */
@@ -147,7 +176,10 @@ export async function getSalesSummaryDoc(
 export type FinalizeBillInput = {
   store_uuid: string;
   created_by: string;
-  lines: { item_id: string; quantity: number; unit_discount?: number }[];
+  seller_id: string;
+  seller_email?: string;
+  seller_name?: string;
+  lines: BillLineInput[];
   discount_percent: number;
   username?: string;
   phone_number?: string;
@@ -160,9 +192,9 @@ const INSUFFICIENT_STOCK = "INSUFFICIENT_STOCK";
 
 export async function finalizeBillInTransaction(input: FinalizeBillInput): Promise<FinalizeBillResult> {
   const db = getDb();
-  let merged;
+  let normalized;
   try {
-    merged = mergeBillLines(input.lines);
+    normalized = normalizeBillLines(input.lines);
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string };
     if (err.code === "UNIT_DISCOUNT_CONFLICT") {
@@ -170,21 +202,21 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
     }
     throw e;
   }
-  if (!merged.length) {
+  if (!normalized.items.length && !normalized.customs.length) {
     throw Object.assign(new Error("No valid line items"), { code: "EMPTY_LINES" });
   }
 
   const bill_id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
   const created_at = new Date().toISOString();
-  const useLineUnitDiscount = hasAnyUnitDiscount(merged);
-  // If any line has unit_discount, ignore overall bill discount completely.
+  const useLineUnitDiscount = hasAnyUnitDiscount(normalized.items);
+  // If any catalog line has unit_discount, ignore overall bill discount completely.
   const discount_percent = useLineUnitDiscount ? 0 : roundMoney(Number(input.discount_percent));
 
   return db.runTransaction(async (tx) => {
     const itemSnaps: Map<string, FirebaseFirestore.DocumentSnapshot> = new Map();
     const batchSnaps: Map<string, FirebaseFirestore.QuerySnapshot> = new Map();
 
-    for (const line of merged) {
+    for (const line of normalized.items) {
       const iRef = itemRef(input.store_uuid, line.item_id);
       const iSnap = await tx.get(iRef);
       if (!iSnap.exists) {
@@ -202,8 +234,9 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
     const yearlyId = yearlySummaryDocId(created_at);
     const periodIds = [dailyId, weeklyId, monthlyId, yearlyId];
 
-    let retail_floor_total = 0;
-    let display_subtotal_total = 0;
+    let catalog_retail = 0;
+    let catalog_display = 0;
+    let custom_charges_total = 0;
     const billLines: BillLineSnapshot[] = [];
     const batchUpdates: { ref: FirebaseFirestore.DocumentReference; newRem: number }[] = [];
     const itemUpdates: Map<
@@ -211,12 +244,15 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
       { total_items: number; current_retail_price: number; current_sale_price: number | null }
     > = new Map();
 
-    for (const line of merged) {
+    for (const line of normalized.items) {
+      const item = itemSnaps.get(line.item_id)!.data() as InventoryItemRecord;
       const bSnap = batchSnaps.get(line.item_id)!;
       const batches: InventoryBatchRecord[] = bSnap.docs.map((d) => d.data() as InventoryBatchRecord);
-      let alloc = fifoAllocateForBill(batches, line.quantity);
+      let alloc = isServiceItem(item.type)
+        ? allocateServiceLine(item, line.quantity)
+        : fifoAllocateForBill(batches, line.quantity);
 
-      if (!alloc.ok) {
+      if (!isServiceItem(item.type) && !alloc.ok) {
         throw Object.assign(new Error(`Insufficient stock for item ${line.item_id}`), { code: INSUFFICIENT_STOCK });
       }
 
@@ -231,16 +267,17 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
         }
       }
 
-      retail_floor_total += alloc.retail_subtotal;
-      display_subtotal_total += alloc.display_subtotal;
+      catalog_retail += alloc.retail_subtotal;
+      catalog_display += alloc.display_subtotal;
 
-      const item = itemSnaps.get(line.item_id)!.data() as InventoryItemRecord;
       billLines.push({
+        kind: "item",
         item_id: line.item_id,
         item_name: item.name || "",
         quantity: line.quantity,
         retail_subtotal: roundMoney(alloc.retail_subtotal),
         display_subtotal: roundMoney(alloc.display_subtotal),
+        discountable: true,
         ...(line.unit_discount != null ? { unit_discount: roundMoney(Number(line.unit_discount)) } : {}),
         fifo_chunks: alloc.chunks.map((c) => ({
           batch_id: c.batch_id,
@@ -250,6 +287,8 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
           display_unit_price: c.display_unit_price,
         })),
       });
+
+      if (isServiceItem(item.type)) continue;
 
       const takeByBatch = new Map<string, number>();
       for (const c of alloc.chunks) takeByBatch.set(c.batch_id, c.quantity);
@@ -279,13 +318,37 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
       });
     }
 
-    retail_floor_total = roundMoney(retail_floor_total);
-    display_subtotal_total = roundMoney(display_subtotal_total);
+    for (const line of normalized.customs) {
+      const alloc = allocateCustomLine(line.unit_price, line.quantity);
+      custom_charges_total += alloc.display_subtotal;
+      billLines.push({
+        kind: "custom",
+        item_id: "",
+        item_name: line.name,
+        quantity: line.quantity,
+        unit_price: roundMoney(line.unit_price),
+        retail_subtotal: 0,
+        display_subtotal: roundMoney(alloc.display_subtotal),
+        discountable: false,
+        fifo_chunks: alloc.chunks.map((c) => ({
+          batch_id: c.batch_id,
+          quantity: c.quantity,
+          retail_price: c.retail_price,
+          sale_price: c.sale_price,
+          display_unit_price: c.display_unit_price,
+        })),
+      });
+    }
 
-    const profit_total = roundMoney(Math.max(0, display_subtotal_total - retail_floor_total));
-    const dp = Math.max(0, Math.min(100, discount_percent));
-    const final_total = roundMoney(retail_floor_total + profit_total * (1 - dp / 100));
-    if (final_total < retail_floor_total - 1e-6) {
+    const totals = computeBillTotals({
+      catalog_retail,
+      catalog_display,
+      custom_charges_total,
+      discount_percent,
+      unit_discount_mode: useLineUnitDiscount,
+    });
+
+    if (totals.final_total - totals.custom_charges_total < totals.retail_floor_total - 1e-6) {
       throw Object.assign(new Error("Discount too high: final total would be below minimum retail floor"), {
         code: DISCOUNT_TOO_HIGH,
       });
@@ -302,17 +365,22 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
       });
     }
 
+    const seller_id = String(input.seller_id || input.created_by);
     const bill: BillRecord = {
       bill_id,
       store_uuid: input.store_uuid,
       created_at,
       created_by: input.created_by,
+      seller_id,
+      ...(input.seller_email ? { seller_email: String(input.seller_email).trim().toLowerCase() } : {}),
+      ...(input.seller_name ? { seller_name: String(input.seller_name).trim() } : {}),
       lines: billLines,
-      discount_percent,
-      discount_amount: roundMoney(display_subtotal_total - final_total),
-      display_subtotal_total,
-      retail_floor_total,
-      final_total,
+      discount_percent: totals.discount_percent,
+      discount_amount: totals.discount_amount,
+      display_subtotal_total: totals.display_subtotal_total,
+      retail_floor_total: totals.retail_floor_total,
+      custom_charges_total: totals.custom_charges_total,
+      final_total: totals.final_total,
       ...(useLineUnitDiscount ? { unit_discount_mode: true } : {}),
       ...(input.username ? { username: String(input.username).trim() } : {}),
       ...(input.phone_number ? { phone_number: String(input.phone_number).trim() } : {}),
@@ -320,12 +388,13 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
 
     tx.set(billsCol(input.store_uuid).doc(bill_id), bill);
 
-    // Report rollups always use the charged totals after unit_discount overrides
-    // and after overall discount (which is 0 in unit_discount_mode).
-    const profit_after_discount = roundMoney(profit_total * (1 - dp / 100));
+    // Catalog profit after discount + full custom charges (customs are never discounted).
+    const profit_after_discount = roundMoney(
+      totals.profit_total * (1 - totals.discount_percent / 100) + totals.custom_charges_total,
+    );
     const bill_quantity_sold = billLines.reduce((sum, line) => sum + line.quantity, 0);
     const storeInc = {
-      revenue: FieldValue.increment(final_total),
+      revenue: FieldValue.increment(totals.final_total),
       bill_count: FieldValue.increment(1),
       profit_after_discount: FieldValue.increment(profit_after_discount),
       quantity_sold: FieldValue.increment(bill_quantity_sold),
@@ -335,9 +404,23 @@ export async function finalizeBillInTransaction(input: FinalizeBillInput): Promi
       tx.set(summaryRef(input.store_uuid, periodDocId), storeInc, { merge: true });
     }
 
+    const staffInc = {
+      seller_id,
+      ...(input.seller_email ? { seller_email: String(input.seller_email).trim().toLowerCase() } : {}),
+      ...(input.seller_name ? { seller_name: String(input.seller_name).trim() } : {}),
+      bill_count: FieldValue.increment(1),
+      revenue: FieldValue.increment(totals.final_total),
+      profit_after_discount: FieldValue.increment(profit_after_discount),
+      quantity_sold: FieldValue.increment(bill_quantity_sold),
+    };
+    for (const periodDocId of periodIds) {
+      tx.set(staffSummaryRef(input.store_uuid, periodDocId, seller_id), staffInc, { merge: true });
+    }
+
     for (const line of billLines) {
+      if (line.kind === "custom") continue;
       const item_profit_before = roundMoney(Math.max(0, line.display_subtotal - line.retail_subtotal));
-      const item_profit_after = roundMoney(item_profit_before * (1 - dp / 100));
+      const item_profit_after = roundMoney(item_profit_before * (1 - totals.discount_percent / 100));
       const item_revenue = roundMoney(line.retail_subtotal + item_profit_after);
       const itemInc = {
         item_id: line.item_id,

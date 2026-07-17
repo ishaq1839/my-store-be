@@ -1,10 +1,11 @@
 import { getDb } from "../firestoreAdmin";
 import { buildTrigrams } from "../../services/admin/users/searchTokens";
+import type { InventoryItemType } from "../../services/inventory/inventoryItemTypes";
 
 export type InventoryItemRecord = {
   uuid: string;
   store_uuid: string;
-  type?: "single" | "carton";
+  type?: InventoryItemType;
   name: string;
   description: string;
   short_code: string;
@@ -44,7 +45,7 @@ export async function generateUniqueShortCode(store_uuid: string): Promise<strin
 
 export async function createInventoryItem(input: {
   store_uuid: string;
-  type: "single" | "carton";
+  type: InventoryItemType;
   name: string;
   description: string;
   created_by: string;
@@ -105,6 +106,24 @@ export async function getInventoryItem(store_uuid: string, item_id: string): Pro
   return snap.data() as InventoryItemRecord;
 }
 
+export async function getInventoryItemsByIds(
+  store_uuid: string,
+  item_ids: string[],
+): Promise<Map<string, InventoryItemRecord>> {
+  const uniqueIds = [...new Set(item_ids.map((id) => String(id).trim()).filter(Boolean))];
+  if (!uniqueIds.length) return new Map();
+
+  const db = getDb();
+  const refs = uniqueIds.map((id) => itemsCol(store_uuid).doc(id));
+  const snaps = await db.getAll(...refs);
+
+  const byId = new Map<string, InventoryItemRecord>();
+  for (const snap of snaps) {
+    if (snap.exists) byId.set(snap.id, snap.data() as InventoryItemRecord);
+  }
+  return byId;
+}
+
 export async function updateItemAfterBatchAdd(input: {
   store_uuid: string;
   item_id: string;
@@ -149,6 +168,28 @@ export async function listInventoryItems(opts: {
   const last = items[items.length - 1];
   const next_cursor = last?.created_at && last.uuid ? { created_at: String(last.created_at), uuid: String(last.uuid) } : null;
   return { items, next_cursor };
+}
+
+export async function listAllInventoryItems(
+  store_uuid: string,
+  max_items = 5000,
+): Promise<InventoryItemRecord[]> {
+  const max = Math.max(1, Math.min(Number(max_items) || 5000, 10000));
+  const items: InventoryItemRecord[] = [];
+  let cursor: { created_at: string; uuid: string } | null = null;
+
+  while (items.length < max) {
+    const page = await listInventoryItems({
+      store_uuid,
+      limit: Math.min(100, max - items.length),
+      cursor,
+    });
+    items.push(...page.items);
+    if (!page.next_cursor || page.items.length === 0) break;
+    cursor = page.next_cursor;
+  }
+
+  return items;
 }
 
 export async function searchInventoryItemsByTrigrams(opts: {

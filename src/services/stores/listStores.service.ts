@@ -1,5 +1,5 @@
-import { AppError } from "../../errors/AppError";
 import { listStoresByOwner, listStoresAll, searchStoresByTrigrams } from "../../database/repos/storesNew.repo";
+import { getStoresForUserUuid } from "../../database/repos/stores.repo";
 import { normalizeSpaces, pickQueryTrigrams } from "../admin/users/searchTokens";
 
 export type ListStoresInput = {
@@ -30,6 +30,21 @@ export async function listStoresService(input: ListStoresInput) {
   const search = normalizeSpaces(String(input.search || ""));
   const owner_id = String(input.actor.uuid);
 
+  // Staff (and store members): return assigned/owned stores from membership.
+  if (actorRole === "staff") {
+    let stores = await getStoresForUserUuid(owner_id);
+    if (search) {
+      const q = search.toLowerCase();
+      stores = stores.filter(
+        (s) =>
+          String(s.name).toLowerCase().includes(q) ||
+          String(s.address).toLowerCase().includes(q) ||
+          String(s.description).toLowerCase().includes(q),
+      );
+    }
+    return { stores: stores.slice(0, input.limit), next_cursor: null };
+  }
+
   // Search mode: fuzzy-ish via trigrams
   if (search) {
     const trigrams = pickQueryTrigrams(search);
@@ -52,4 +67,3 @@ export async function listStoresService(input: ListStoresInput) {
     next_cursor: res.next_cursor ? encodeCursor(res.next_cursor) : null,
   };
 }
-

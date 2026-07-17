@@ -8,13 +8,15 @@ import {
 import { assertCanManageStoreInventory } from "./assertStoreInventoryAccess.service";
 import { createItemBatchService } from "./createItemBatch.service";
 
+import type { InventoryItemType } from "./inventoryItemTypes";
+
 export type BulkCreateItemRow = {
-  type: "single" | "carton";
+  type: InventoryItemType;
   name: string;
   description: string;
   retail_price: number;
   sale_price?: number | null;
-  total_items: number;
+  total_items?: number;
 };
 
 async function processBulkImportJob(input: {

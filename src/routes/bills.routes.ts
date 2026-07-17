@@ -6,6 +6,7 @@ import {
   billsFinalizeController,
   billsSummaryController,
   billsListController,
+  billsGetDetailController,
 } from "../controllers/bills.controller";
 import {
   billPreviewBodySchema,
@@ -22,3 +23,4 @@ billsRouter.post("/preview", validateBody(billPreviewBodySchema), billsPreviewCo
 billsRouter.get("/summary", validateQuery(billSummaryQuerySchema), billsSummaryController);
 billsRouter.post("/", validateBody(billFinalizeBodySchema), billsFinalizeController);
 billsRouter.get("/", validateQuery(billListQuerySchema), billsListController);
+billsRouter.get("/:bill_id", billsGetDetailController);

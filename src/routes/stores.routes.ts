@@ -7,6 +7,7 @@ import { inventoryRouter } from "./inventory.routes";
 import { billsRouter } from "./bills.routes";
 import { reportsRouter } from "./reports.routes";
 import { contactsRouter } from "./contacts.routes";
+import { staffRouter } from "./staff.routes";
 
 export const storesRouter = Router();
 
@@ -14,6 +15,7 @@ storesRouter.use(requireAuth);
 
 storesRouter.post("/", validateBody(storeCreateBodySchema), createStoreController);
 storesRouter.get("/", validateQuery(storeListQuerySchema), listStoresController);
+storesRouter.use("/:store_uuid/staff", staffRouter);
 storesRouter.use("/:store_uuid/inventory", inventoryRouter);
 storesRouter.use("/:store_uuid/bills", billsRouter);
 storesRouter.use("/:store_uuid/reports", reportsRouter);

@@ -1,14 +1,17 @@
 import { z } from "zod";
+import { INVENTORY_ITEM_TYPES } from "../services/inventory/inventoryItemTypes";
+
+const inventoryItemTypeSchema = z.enum(INVENTORY_ITEM_TYPES);
 
 export const inventoryCreateItemBodySchema = z
   .object({
     item_id: z.string().trim().min(1).optional(),
-    type: z.enum(["single", "carton"]).optional(),
+    type: inventoryItemTypeSchema.optional(),
     name: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).optional(),
     retail_price: z.coerce.number().positive("retail_price must be positive"),
     sale_price: z.union([z.coerce.number().nonnegative(), z.null()]).optional(),
-    total_items: z.coerce.number().int().positive("total_items must be a positive integer"),
+    total_items: z.coerce.number().int().nonnegative("total_items must be zero or a positive integer").optional(),
   })
   .superRefine((data, ctx) => {
     if (!data.item_id) {
@@ -29,6 +32,22 @@ export const inventoryCreateItemBodySchema = z
           path: ["description"],
         });
       }
+      const qty = data.total_items ?? 0;
+      if (data.type === "service") {
+        if (qty !== 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "total_items must be 0 for service items",
+            path: ["total_items"],
+          });
+        }
+      } else if (qty <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "total_items must be a positive integer for single and carton items",
+          path: ["total_items"],
+        });
+      }
     }
   });
 
@@ -47,15 +66,41 @@ export const inventorySellBodySchema = z.object({
   quantity: z.coerce.number().int().positive("quantity must be a positive integer"),
 });
 
-/** Single new-item row for bulk create (no item_id / add-batch). */
-export const inventoryBulkItemSchema = z.object({
-  type: z.enum(["single", "carton"]),
-  name: z.string().trim().min(1, "name is required").max(200, "name is too long"),
-  description: z.string().trim().min(1, "description is required").max(2000, "description is too long"),
+export const inventoryUpdatePricesBodySchema = z.object({
   retail_price: z.coerce.number().positive("retail_price must be positive"),
   sale_price: z.union([z.coerce.number().nonnegative(), z.null()]).optional(),
-  total_items: z.coerce.number().int().positive("total_items must be a positive integer"),
+  /** Optional: set new remaining stock. Omit to keep current remaining quantity when repricing. */
+  total_items: z.coerce.number().int().nonnegative("total_items must be zero or a positive integer").optional(),
 });
+
+/** Single new-item row for bulk create (no item_id / add-batch). */
+export const inventoryBulkItemSchema = z
+  .object({
+    type: inventoryItemTypeSchema,
+    name: z.string().trim().min(1, "name is required").max(200, "name is too long"),
+    description: z.string().trim().min(1, "description is required").max(2000, "description is too long"),
+    retail_price: z.coerce.number().positive("retail_price must be positive"),
+    sale_price: z.union([z.coerce.number().nonnegative(), z.null()]).optional(),
+    total_items: z.coerce.number().int().nonnegative("total_items must be zero or a positive integer").optional(),
+  })
+  .superRefine((data, ctx) => {
+    const qty = data.total_items ?? 0;
+    if (data.type === "service") {
+      if (qty !== 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "total_items must be 0 for service items",
+          path: ["total_items"],
+        });
+      }
+    } else if (qty <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "total_items must be a positive integer for single and carton items",
+        path: ["total_items"],
+      });
+    }
+  });
 
 export const inventoryBulkCreateBodySchema = z.object({
   items: z
