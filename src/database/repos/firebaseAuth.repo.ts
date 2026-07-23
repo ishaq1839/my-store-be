@@ -1,5 +1,5 @@
 import { AppError } from "../../errors/AppError";
-import { requireEnv } from "../../config/env";
+import { optionalEnv, requireEnv } from "../../config/env";
 import { getAuth } from "../firestoreAdmin";
 
 export type CreateAuthUserInput = {
@@ -54,9 +54,18 @@ export async function deleteAuthUser(uid: string): Promise<void> {
 export async function generatePasswordResetLink(email: string): Promise<string> {
   const auth = getAuth();
   const normalizedEmail = String(email).trim().toLowerCase();
+  const continueUrl =
+    optionalEnv("PASSWORD_RESET_CONTINUE_URL") ||
+    optionalEnv("APP_CONTINUE_URL") ||
+    "http://localhost:3000/reset-password";
 
   try {
-    return await auth.generatePasswordResetLink(normalizedEmail);
+    // ActionCodeSettings.url must be on an Authorized domain in Firebase Console
+    // (Authentication → Settings → Authorized domains). Avoids Dynamic Links failures.
+    return await auth.generatePasswordResetLink(normalizedEmail, {
+      url: continueUrl,
+      handleCodeInApp: false,
+    });
   } catch (err) {
     const code = (err as { code?: unknown })?.code;
     // Avoid user enumeration: treat missing user as success (no link).
